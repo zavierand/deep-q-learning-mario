@@ -8,6 +8,7 @@ import os
 import copy
 
 # import frameworks
+import numpy as np
 import torch
 from torch import nn
 import torch.optim as optim
@@ -92,7 +93,7 @@ class DQN(nn.Module):
         x = x.view(x.size(0), -1)
         return self.model(x)
     
-    def _train(self, env, num_epochs=100, batch_size=32, gamma=0.99):
+    def _train(self, env, num_epochs=10000, batch_size=32, gamma=0.99):
         # initialize wandb
         wandb.init(project=os.getenv('WANDB_PROJECT'), entity=os.getenv('WANDB_LOGIN'))
         
@@ -107,11 +108,16 @@ class DQN(nn.Module):
 
         # epsilon values that will be used for training
         epsilon = 1.0
-        epsilon_decay = 0.995
+        epsilon_decay = 0.998
         epsilon_min = 0.1
+
+        # keep track of rewards for avg calc
+        rewards = []
 
         # print bar for notebook logging
         bar_width = 30
+
+        print(f'Training for {num_epochs} epochs beginning.....')
 
         # training loop
         for epoch in range(num_epochs):
@@ -119,6 +125,8 @@ class DQN(nn.Module):
             obs = self.preprocess(obs)
             done = False
 
+            epoch_reward = 0.0
+            step_count = 0
             while not done:
                 # select action -> call to policy
                 action = epsilon_greedy_policy(
@@ -130,6 +138,8 @@ class DQN(nn.Module):
 
                 # step through environment
                 next_obs, reward, terminated, truncated, _ = env.step(action)
+                epoch_reward += reward
+                step_count += 1
                 done = terminated or truncated
                 next_obs_tensor = self.preprocess(next_obs)
 
@@ -180,15 +190,31 @@ class DQN(nn.Module):
             progress = int(bar_width * (epoch + 1) / num_epochs)
             bar = "#" * progress + "-" * (bar_width - progress)
 
-            # print epochs
-            print(f"Epoch {epoch+1}/{num_epochs}, [{bar}] Loss: {loss.item():.4f}, Epsilon: {epsilon:.4f}")
+            # add reward to list
+            rewards.append(epoch_reward)
+
+            # print and log epochs to ipynb and wandb
+            print(f'Epoch {epoch+1}/{num_epochs}, [{bar}] Loss: {loss.item():.4f}, Epsilon: {epsilon:.4f}, Reward: {epoch_reward}')
+            wandb.log({
+                'epsilon': epsilon,
+                'loss': loss.item(),
+                'episode_reward': epoch_reward, 
+                'steps': step_count,
+                'avg_reward': np.mean(rewards[-100:])
+            })
 
             # periodically update target network
-            if (epoch + 1) % 5 == 0:
+            if (epoch + 1) % 100 == 0:
                 self.target_model.load_state_dict(self.model.state_dict())
 
-        torch.save(self.model.state_dict(), "dqn_trained.pt")
-
+            # save models periodically
+            if epoch % 500 == 0:
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': self.model.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'loss': loss,
+                }, f'./trained_models/dqn_checkpoint_epoch_{epoch}.pt')
 
     # evaluate the model
     def _eval(self, env, num_episodes, render=False):
@@ -211,6 +237,7 @@ class DQN(nn.Module):
                     # Capture frame when rendering is triggered
                     img = env.render()
                     frames.append(img)
+                    wandb.log({"evaluation_frames": wandb.Image(img)})
 
                 # Action selection
                 action = epsilon_greedy_policy(
