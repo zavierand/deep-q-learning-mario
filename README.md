@@ -45,7 +45,7 @@ $$\alpha = \text{argmax}Q'(a, a')$$
 
 or as the DeepMind paper writes:
 
-$$\a_t = \text{max}_aQ*(\phi(s_t), \a_t; \theta)$$
+$$a_t = \text{max}_aQ*(\phi(s_t), a_t; \theta)$$
 
 [*to be updated*]
 ## Replay Buffer
