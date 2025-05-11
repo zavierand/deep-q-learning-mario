@@ -9,9 +9,8 @@ To understand q-learning, we need to understand the different type of reinforcem
 
 ## Q-Value and the Bellman Equation
 Now, we can start with understanding how to compute the q-value by introducing a q-table. A q-table is a matrix that we can use to store values q-values of each state-action pair. We can think back to simple markov decision processes, where  To compute a q-value, we can solve the Bellman equation:
-$$
-Q^{*}(s_t, a_t) \Leftarrow Q(s, a) + \alpha(r + \gamma \text{max}Q(s', a') - Q(s, a))
-$$
+
+$$Q^{*}(s_t, a_t) \Leftarrow Q(s, a) + \alpha(r + \gamma \text{max}Q(s', a') - Q(s, a))$$
 
 where solving for $Q^{*}(s_t, a_t)$ provides us the q-value. The Bellman Equation takes in two arguments to the function, a state, $s_t$, at time, $t$, and an action $a_t$ at time $t$.To understand each term in the equation, we can break it down where:
     - $\alpha$ is the learning rate,
@@ -41,13 +40,12 @@ q_values = q_network(state)
 ```
 
 Mathematically, we can represent the epsilon-greedy algorithm as the following function:
-$$
-\alpha = \text{argmax}Q'(a, a')
-$$ 
+
+$$\alpha = \text{argmax}Q'(a, a')$$ 
+
 or as the DeepMind paper writes:
-$$
-\a_t = \text{max}_aQ*(\phi(s_t), \a_t; \theta)
-$$
+
+$$\a_t = \text{max}_aQ*(\phi(s_t), \a_t; \theta)$$
 
 [*to be updated*]
 ## Replay Buffer
