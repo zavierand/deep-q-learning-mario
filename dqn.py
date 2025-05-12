@@ -13,6 +13,9 @@ import torch
 from torch import nn
 import torch.optim as optim
 import torchvision.transforms as T
+import torch.nn.utils as utils
+import gymnasium as gym
+#from gym.wrappers import FrameSkip
 
 # import conv layers, replay buffer, and policy
 from cnn import ConvFeatureExtractor
@@ -22,6 +25,9 @@ from policy import epsilon_greedy_policy
 # store env vars in dotenv
 from dotenv import load_dotenv
 
+# import tqdm for progress bar
+from tqdm import trange
+# load environment variables
 load_dotenv()
 
 # model implementation
@@ -29,15 +35,15 @@ class DQN(nn.Module):
     def __init__(self, env, in_channels, num_actions):
         super(DQN, self).__init__()
 
-        # call cuda, speed up training
+        # set device to cuda if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.to(self.device)
-
+        #print(f'Before training: CUDA available: {torch.cuda.is_available()}')
+        
         self.conv_layers = ConvFeatureExtractor(in_channels)
         self.env = env
 
         # hyperparameters
-        LR = 1e-2
+        LR = 1e-3 # 0.001
 
         # preprocess
         self.transform = T.Compose([
@@ -48,7 +54,7 @@ class DQN(nn.Module):
 
         # dummy pass to determine flattened size
         with torch.no_grad():
-            dummy_input = torch.zeros(1, in_channels, 84, 84)
+            dummy_input = torch.zeros(1, in_channels, 84, 84)   # original input from paper
             flattened_size = self.conv_layers(dummy_input).view(1, -1).size(1)
 
         # define model
@@ -69,26 +75,35 @@ class DQN(nn.Module):
         self.target_model.eval()
 
         # initialize optimizers
-        self.criterion = nn.MSELoss()
+        self.criterion = nn.HuberLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=LR)
 
         # initialize buffer
         self.replay_buffer = ReplayBuffer(10000)
 
+        # set model to cuda if available, otherwise cpu
+        self.to(self.device)
+
     # preprocess image
     def preprocess(self, obs):
+        frame = self.transform(obs)
+        return frame  # Just return the single RGB frame
+            
+    def soft_update(self, tau):
         '''
-        Preprocess the input image from the environment.
-        This resizes the image and converts it to a tensor.
+        soft update of the target network's parameters.
+        theta_target = tau * theta_online + (1 - tau) * theta_target
         '''
-        return self.transform(obs)
+        for target_param, online_param in zip(self.target_model.parameters(), self.model.parameters()):
+            target_param.data.copy_(tau * online_param.data + (1.0 - tau) * target_param.data)
+
 
     def forward(self, x):
         '''
         input: x = np array returned from env.render() method
         return: the q-value associated with this episode
         '''
-
+        x = x.to(self.device)
         x = self.conv_layers(x)
         x = x.view(x.size(0), -1)
         return self.model(x)
@@ -102,27 +117,25 @@ class DQN(nn.Module):
             'num_epochs': num_epochs,
             'batch_size': batch_size,
             'gamma': gamma,
-            'epsilon_decay': 0.995,
+            'epsilon_decay': 0.999,
             'epsilon_min': 0.1
         })
 
         # epsilon values that will be used for training
         epsilon = 1.0
-        epsilon_decay = 0.998
+        epsilon_decay = 0.999
         epsilon_min = 0.1
 
         # keep track of rewards for avg calc
         rewards = []
 
-        # print bar for notebook logging
-        bar_width = 30
-
-        print(f'Training for {num_epochs} epochs beginning.....')
-
+        # begin training
+        print(f'Training model for {num_epochs} epochs beginning.....')
         # training loop
-        for epoch in range(num_epochs):
+        t = trange(num_epochs, desc="Training", leave=True)
+        for epoch in t:
             obs, _ = env.reset()
-            obs = self.preprocess(obs)
+            obs = self.preprocess(obs).to(self.device)
             done = False
 
             epoch_reward = 0.0
@@ -132,7 +145,7 @@ class DQN(nn.Module):
                 action = epsilon_greedy_policy(
                     env, 
                     self, 
-                    obs.unsqueeze(0).float(), 
+                    obs.unsqueeze(0).float().to(self.device), 
                     epsilon
                 )
 
@@ -141,7 +154,7 @@ class DQN(nn.Module):
                 epoch_reward += reward
                 step_count += 1
                 done = terminated or truncated
-                next_obs_tensor = self.preprocess(next_obs)
+                next_obs_tensor = self.preprocess(next_obs).to(self.device)
 
                 # store transition in replay buffer
                 self.replay_buffer.push(obs, action, next_obs_tensor, reward, done)
@@ -155,11 +168,11 @@ class DQN(nn.Module):
                 transitions = self.replay_buffer.sample(batch_size)
                 batch = Transition(*zip(*transitions))
 
-                state_batch = torch.stack(batch.state).float()
-                next_state_batch = torch.stack(batch.next_state).float()
-                action_batch = torch.tensor(batch.action, dtype=torch.int64).unsqueeze(1)
-                reward_batch = torch.tensor(batch.reward, dtype=torch.float32).unsqueeze(1)
-                done_batch = torch.tensor(batch.done, dtype=torch.float32).unsqueeze(1)
+                state_batch = torch.stack(batch.state).float().to(self.device)
+                next_state_batch = torch.stack(batch.next_state).float().to(self.device)
+                action_batch = torch.tensor(batch.action, dtype=torch.int64).unsqueeze(1).to(self.device)
+                reward_batch = torch.tensor(batch.reward, dtype=torch.float32).unsqueeze(1).to(self.device)
+                done_batch = torch.tensor(batch.done, dtype=torch.float32).unsqueeze(1).to(self.device)
 
                 # print(f'State batch shape: {state_batch.shape}')
                 # print(f'Action batch shape: {action_batch.shape}')
@@ -178,23 +191,28 @@ class DQN(nn.Module):
                 loss = self.criterion(q_values, target_q_values)
                 # print("Loss before backward:", loss.item())
 
+                # backprop & adam step
                 self.optimizer.zero_grad()
                 loss.backward()
+
+                # adding clipping to prevent explosing gradients
+                #    - noted from previous training runs
+                utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+                # update model
                 self.optimizer.step()
 
             # decay epsilon
             if epsilon > epsilon_min:
                 epsilon *= epsilon_decay
 
-            # print training progress
-            progress = int(bar_width * (epoch + 1) / num_epochs)
-            bar = "#" * progress + "-" * (bar_width - progress)
-
             # add reward to list
             rewards.append(epoch_reward)
 
             # print and log epochs to ipynb and wandb
-            print(f'Epoch {epoch+1}/{num_epochs}, [{bar}] Loss: {loss.item():.4f}, Epsilon: {epsilon:.4f}, Reward: {epoch_reward}')
+            t.set_description(f"Epoch {epoch+1}/{num_epochs} | Loss: {loss.item():.4f} | Eps: {epsilon:.3f} | Reward: {epoch_reward:.1f}")
+
+            # wandb
             wandb.log({
                 'epsilon': epsilon,
                 'loss': loss.item(),
@@ -204,17 +222,17 @@ class DQN(nn.Module):
             })
 
             # periodically update target network
-            if (epoch + 1) % 100 == 0:
-                self.target_model.load_state_dict(self.model.state_dict())
+            if (epoch + 1) % 10 == 0:
+                self.soft_update(tau=0.001)  # You can adjust tau as needed
 
-            # save models periodically
+            # checkpoint model every 500 epochs
             if epoch % 500 == 0:
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'loss': loss,
-                }, f'./trained_models/dqn_checkpoint_epoch_{epoch}.pt')
+                }, f'./checkpoints/dqn_checkpoint_epoch_{epoch}.pt')
 
     # evaluate the model
     def _eval(self, env, num_episodes, render=False):
@@ -226,15 +244,15 @@ class DQN(nn.Module):
         for episode in range(num_episodes):
             do_render = render and (episode % 200 == 0)
 
-            # Reset environment and process the observation
+            # reset environment and process the observation
             obs, _ = env.reset()
-            obs = self.preprocess(obs).unsqueeze(0).float()
+            obs = self.preprocess(obs).unsqueeze(0).float().to(self.device)
             done = False
             episode_reward = 0
 
             while not done:
                 if do_render:
-                    # Capture frame when rendering is triggered
+                    # capture frame when rendering is triggered
                     img = env.render()
                     frames.append(img)
                     wandb.log({"evaluation_frames": wandb.Image(img)})
@@ -244,14 +262,14 @@ class DQN(nn.Module):
                     env,
                     self,
                     obs,
-                    epsilon=0.0  # No exploration during evaluation
+                    epsilon=0.0  # no exploration during evaluation
                 )
 
                 next_obs, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
 
                 episode_reward += reward
-                obs = self.preprocess(next_obs).unsqueeze(0).float()
+                obs = self.preprocess(next_obs).unsqueeze(0).float().to(self.device)
 
             rewards.append(episode_reward)
             total_reward += episode_reward
