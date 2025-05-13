@@ -11,11 +11,10 @@ import copy
 import numpy as np
 import torch
 from torch import nn
+import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
 import torch.nn.utils as utils
-import gymnasium as gym
-#from gym.wrappers import FrameSkip
 
 # import conv layers, replay buffer, and policy
 from cnn import ConvFeatureExtractor
@@ -25,8 +24,13 @@ from policy import epsilon_greedy_policy
 # store env vars in dotenv
 from dotenv import load_dotenv
 
+# import gym for fram stacking during training
+import gymnasium as gym
+from gymnasium.wrappers import FrameStackObservation
+
 # import tqdm for progress bar
 from tqdm import trange
+
 # load environment variables
 load_dotenv()
 
@@ -46,11 +50,11 @@ class DQN(nn.Module):
         LR = 1e-3 # 0.001
 
         # preprocess
-        self.transform = T.Compose([
+        '''self.transform = T.Compose([
             T.ToPILImage(),  # Convert numpy array to PIL Image
             T.Resize((84, 84)),  # resize image
             T.ToTensor(),  # Convert to tensor
-        ])
+        ])'''
 
         # dummy pass to determine flattened size
         with torch.no_grad():
@@ -63,8 +67,8 @@ class DQN(nn.Module):
             nn.ReLU(),
 
             # one dense layer
-            nn.Linear(512, 512),
-            nn.ReLU(),
+            # nn.Linear(512, 512),
+            # nn.ReLU(),
 
             # output layer
             nn.Linear(512, num_actions)
@@ -79,12 +83,13 @@ class DQN(nn.Module):
         self.optimizer = optim.Adam(self.model.parameters(), lr=LR)
 
         # initialize buffer
-        self.replay_buffer = ReplayBuffer(10000)
+        self.replay_buffer = ReplayBuffer(100000)
 
         # set model to cuda if available, otherwise cpu
         self.to(self.device)
 
     # preprocess image
+
     def preprocess(self, obs):
         frame = self.transform(obs)
         return frame  # Just return the single RGB frame
@@ -96,6 +101,13 @@ class DQN(nn.Module):
         '''
         for target_param, online_param in zip(self.target_model.parameters(), self.model.parameters()):
             target_param.data.copy_(tau * online_param.data + (1.0 - tau) * target_param.data)
+
+    def checkConvInputSize(self, obs):
+        # check size of conv input to make sure enough frames are being passed
+        # after preprocessing
+        print(f'Shape of observation: {obs.shape}')
+        obs = self.preprocess(obs).to(self.device)
+        print(f'Shape of Conv Input: {obs.shape}')
 
 
     def forward(self, x):
@@ -110,7 +122,7 @@ class DQN(nn.Module):
     
     def _train(self, env, num_epochs=10000, batch_size=32, gamma=0.99):
         # initialize wandb
-        wandb.init(project=os.getenv('WANDB_PROJECT'), entity=os.getenv('WANDB_LOGIN'))
+        '''wandb.init(project=os.getenv('WANDB_PROJECT'), entity=os.getenv('WANDB_LOGIN'))
         
         # log hyperparameters to wandb
         wandb.config.update({
@@ -119,23 +131,27 @@ class DQN(nn.Module):
             'gamma': gamma,
             'epsilon_decay': 0.999,
             'epsilon_min': 0.1
-        })
+        })'''
 
         # epsilon values that will be used for training
         epsilon = 1.0
         epsilon_decay = 0.999
-        epsilon_min = 0.1
+        epsilon_min = 0.05
 
         # keep track of rewards for avg calc
-        rewards = []
+        rewards = np.array([])
 
         # begin training
         print(f'Training model for {num_epochs} epochs beginning.....')
         # training loop
         t = trange(num_epochs, desc="Training", leave=True)
         for epoch in t:
+            # slight preprocessing
             obs, _ = env.reset()
-            obs = self.preprocess(obs).to(self.device)
+            obs = obs / 255  # normalize the pixels between 0 and 1
+            #obs = np.expand_dims(obs, axis = 0)
+            obs = torch.as_tensor(obs, dtype = torch.float32).to(self.device)
+            # print(obs.shape)    # light debugging
             done = False
 
             epoch_reward = 0.0
@@ -154,7 +170,12 @@ class DQN(nn.Module):
                 epoch_reward += reward
                 step_count += 1
                 done = terminated or truncated
-                next_obs_tensor = self.preprocess(next_obs).to(self.device)
+                next_obs = next_obs / 255
+                next_obs_tensor = torch.as_tensor(next_obs, dtype = torch.float32).to(self.device)
+
+                # add reward to list
+                reward = np.append(reward, epoch_reward)
+                reward = np.clip(reward, -1, 1)
 
                 # store transition in replay buffer
                 self.replay_buffer.push(obs, action, next_obs_tensor, reward, done)
@@ -167,12 +188,14 @@ class DQN(nn.Module):
                 # sample batch and convert to tensors
                 transitions = self.replay_buffer.sample(batch_size)
                 batch = Transition(*zip(*transitions))
-
                 state_batch = torch.stack(batch.state).float().to(self.device)
                 next_state_batch = torch.stack(batch.next_state).float().to(self.device)
                 action_batch = torch.tensor(batch.action, dtype=torch.int64).unsqueeze(1).to(self.device)
-                reward_batch = torch.tensor(batch.reward, dtype=torch.float32).unsqueeze(1).to(self.device)
-                done_batch = torch.tensor(batch.done, dtype=torch.float32).unsqueeze(1).to(self.device)
+                
+                # convert batches to np arrays before assigning to tensor
+                reward_batch = torch.tensor([r[0] for r in batch.reward], dtype=torch.float32).unsqueeze(1).to(self.device)
+                done_batch_np = np.array(batch.done)
+                done_batch = torch.as_tensor(done_batch_np, dtype=torch.long).unsqueeze(1).to(self.device)
 
                 # print(f'State batch shape: {state_batch.shape}')
                 # print(f'Action batch shape: {action_batch.shape}')
@@ -187,7 +210,7 @@ class DQN(nn.Module):
                     max_next_q = self.target_model(next_state_conv).max(1)[0].unsqueeze(1)
                     target_q_values = reward_batch + gamma * max_next_q * (1 - done_batch)
 
-                # compute loss and optimization
+                # compute loss and optimize
                 loss = self.criterion(q_values, target_q_values)
                 # print("Loss before backward:", loss.item())
 
@@ -206,20 +229,17 @@ class DQN(nn.Module):
             if epsilon > epsilon_min:
                 epsilon *= epsilon_decay
 
-            # add reward to list
-            rewards.append(epoch_reward)
-
             # print and log epochs to ipynb and wandb
             t.set_description(f"Epoch {epoch+1}/{num_epochs} | Loss: {loss.item():.4f} | Eps: {epsilon:.3f} | Reward: {epoch_reward:.1f}")
 
-            # wandb
-            wandb.log({
+            # wandb log
+            '''wandb.log({
                 'epsilon': epsilon,
                 'loss': loss.item(),
                 'episode_reward': epoch_reward, 
                 'steps': step_count,
                 'avg_reward': np.mean(rewards[-100:])
-            })
+            })'''
 
             # periodically update target network
             if (epoch + 1) % 10 == 0:
@@ -246,7 +266,9 @@ class DQN(nn.Module):
 
             # reset environment and process the observation
             obs, _ = env.reset()
-            obs = self.preprocess(obs).unsqueeze(0).float().to(self.device)
+            obs /= 255
+            obs = torch.as_tensor(obs, dtype = torch.float32).to(self.device)
+            # obs = self.preprocess(obs).unsqueeze(0).float().to(self.device)
             done = False
             episode_reward = 0
 
@@ -269,7 +291,9 @@ class DQN(nn.Module):
                 done = terminated or truncated
 
                 episode_reward += reward
-                obs = self.preprocess(next_obs).unsqueeze(0).float().to(self.device)
+                next_obs = torch.as_tensor(next_obs, dtype = torch.float32).to(self.device)
+                obs = next_obs
+                # obs = self.preprocess(next_obs).unsqueeze(0).float().to(self.device)
 
             rewards.append(episode_reward)
             total_reward += episode_reward

@@ -6,6 +6,7 @@ import os
 
 # import environment dependencies
 import gymnasium as gym
+from gymnasium.wrappers import GrayscaleObservation, ResizeObservation, FrameStackObservation
 import ale_py
 from ale_py import ALEInterface
 
@@ -31,22 +32,33 @@ def __main__():
     API_KEY = os.getenv('API_KEY')
     if API_KEY is None:
         raise ValueError("API_KEY environment variable not set.")
+    
     # instantiate the environment
     env = gym.make(
         'ALE/MarioBros-v5',
-        obs_type = 'rgb',
+        obs_type = 'grayscale',
         render_mode = 'rgb_array',
         frameskip = 4
     )
 
+    # preprocess env
+    env = ResizeObservation(env, (84, 84))
+    # env = GrayscaleObservation(env)
+    env = FrameStackObservation(env, stack_size=4)
+
     # reset before training
     obs, info = env.reset()
-    in_channels = env.render().shape[2]
 
-    #env = ResizeObservation(env, shape=(84, 84))
-    #env = FrameStack(env, num_stack=4)  # automatic frame stacking
+    # slight preprocessing before being passed into training
+    #obs = obs.transpose(0, 3, 1, 2).reshape(210, 160, 12)
+    print(obs.shape)
+
+    in_channels = obs.shape[0]
+    print(f'In-channels: {in_channels}')
 
     # wandb login
+        
+    '''
     wandb.login(key = API_KEY)
 
     # init wandb logging 
@@ -58,7 +70,7 @@ def __main__():
             'architecture': 'DQN',
             'epochs': 5000,
         },
-    )
+    )'''
 
     epochs = 5000
 
@@ -68,7 +80,7 @@ def __main__():
     # train the model
     dqn._train(env, num_epochs = epochs)
 
-    # env.close() 
+    env.close() 
 
 if __name__ == "__main__":
     # run the main function
