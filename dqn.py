@@ -26,7 +26,6 @@ from dotenv import load_dotenv
 
 # import gym for fram stacking during training
 import gymnasium as gym
-from gymnasium.wrappers import FrameStackObservation
 
 # import tqdm for progress bar
 from tqdm import trange
@@ -83,7 +82,7 @@ class DQN(nn.Module):
         self.optimizer = optim.Adam(self.model.parameters(), lr=LR)
 
         # initialize buffer
-        self.replay_buffer = ReplayBuffer(100000)
+        self.replay_buffer = ReplayBuffer(10000)
 
         # set model to cuda if available, otherwise cpu
         self.to(self.device)
@@ -122,7 +121,7 @@ class DQN(nn.Module):
     
     def _train(self, env, num_epochs=10000, batch_size=32, gamma=0.99):
         # initialize wandb
-        '''wandb.init(project=os.getenv('WANDB_PROJECT'), entity=os.getenv('WANDB_LOGIN'))
+        wandb.init(project=os.getenv('WANDB_PROJECT'), entity=os.getenv('WANDB_LOGIN'))
         
         # log hyperparameters to wandb
         wandb.config.update({
@@ -131,7 +130,7 @@ class DQN(nn.Module):
             'gamma': gamma,
             'epsilon_decay': 0.999,
             'epsilon_min': 0.1
-        })'''
+        })
 
         # epsilon values that will be used for training
         epsilon = 1.0
@@ -174,8 +173,8 @@ class DQN(nn.Module):
                 next_obs_tensor = torch.as_tensor(next_obs, dtype = torch.float32).to(self.device)
 
                 # add reward to list
-                reward = np.append(reward, epoch_reward)
-                reward = np.clip(reward, -1, 1)
+                #rewards = np.append(reward, epoch_reward)
+                #rewards = np.clip(reward, -1, 1)
 
                 # store transition in replay buffer
                 self.replay_buffer.push(obs, action, next_obs_tensor, reward, done)
@@ -193,7 +192,7 @@ class DQN(nn.Module):
                 action_batch = torch.tensor(batch.action, dtype=torch.int64).unsqueeze(1).to(self.device)
                 
                 # convert batches to np arrays before assigning to tensor
-                reward_batch = torch.tensor([r[0] for r in batch.reward], dtype=torch.float32).unsqueeze(1).to(self.device)
+                reward_batch = torch.tensor([r for r in batch.reward], dtype=torch.float32).unsqueeze(1).to(self.device)
                 done_batch_np = np.array(batch.done)
                 done_batch = torch.as_tensor(done_batch_np, dtype=torch.long).unsqueeze(1).to(self.device)
 
@@ -229,17 +228,21 @@ class DQN(nn.Module):
             if epsilon > epsilon_min:
                 epsilon *= epsilon_decay
 
+            # append rewards to list
+            rewards = np.append(rewards, np.clip(epoch_reward, -1, 1))
+            #rewards = np.clip(reward, -1, 1)
+            
             # print and log epochs to ipynb and wandb
             t.set_description(f"Epoch {epoch+1}/{num_epochs} | Loss: {loss.item():.4f} | Eps: {epsilon:.3f} | Reward: {epoch_reward:.1f}")
 
             # wandb log
-            '''wandb.log({
+            wandb.log({
                 'epsilon': epsilon,
                 'loss': loss.item(),
                 'episode_reward': epoch_reward, 
                 'steps': step_count,
                 'avg_reward': np.mean(rewards[-100:])
-            })'''
+            })
 
             # periodically update target network
             if (epoch + 1) % 10 == 0:
@@ -252,7 +255,7 @@ class DQN(nn.Module):
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'loss': loss,
-                }, f'./checkpoints/dqn_checkpoint_epoch_{epoch}.pt')
+                }, f'./checkpoints/train_02/dqn_checkpoint_epoch_{epoch}.pt')
 
     # evaluate the model
     def _eval(self, env, num_episodes, render=False):

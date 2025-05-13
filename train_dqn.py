@@ -51,14 +51,12 @@ def __main__():
 
     # slight preprocessing before being passed into training
     #obs = obs.transpose(0, 3, 1, 2).reshape(210, 160, 12)
-    print(obs.shape)
+    # print(obs.shape)
 
     in_channels = obs.shape[0]
-    print(f'In-channels: {in_channels}')
+    # print(f'In-channels: {in_channels}')
 
     # wandb login
-        
-    '''
     wandb.login(key = API_KEY)
 
     # init wandb logging 
@@ -70,7 +68,7 @@ def __main__():
             'architecture': 'DQN',
             'epochs': 5000,
         },
-    )'''
+    )
 
     epochs = 5000
 
