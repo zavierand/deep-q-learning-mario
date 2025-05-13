@@ -30,6 +30,9 @@ import gymnasium as gym
 # import tqdm for progress bar
 from tqdm import trange
 
+# import checkpoint methods for continuing training
+from checkpoints import save_checkpoint, load_checkpoint
+
 # load environment variables
 load_dotenv()
 
@@ -46,7 +49,8 @@ class DQN(nn.Module):
         self.env = env
 
         # hyperparameters
-        LR = 1e-3 # 0.001
+        #       really low lr for large action space
+        LR = 2.5e-4 # 0.00025
 
         # preprocess
         '''self.transform = T.Compose([
@@ -119,7 +123,7 @@ class DQN(nn.Module):
         x = x.view(x.size(0), -1)
         return self.model(x)
     
-    def _train(self, env, num_epochs=10000, batch_size=32, gamma=0.99):
+    def _train(self, env, num_epochs=10000, batch_size=32, gamma=0.99, checkpoint_path = None):
         # initialize wandb
         wandb.init(project=os.getenv('WANDB_PROJECT'), entity=os.getenv('WANDB_LOGIN'))
         
@@ -140,8 +144,12 @@ class DQN(nn.Module):
         # keep track of rewards for avg calc
         rewards = np.array([])
 
+        if checkpoint_path:
+            load_checkpoint(self.model, self.optimizer.load_state_dict, checkpoint_path)
+
         # begin training
         print(f'Training model for {num_epochs} epochs beginning.....')
+
         # training loop
         t = trange(num_epochs, desc="Training", leave=True)
         for epoch in t:
@@ -269,7 +277,7 @@ class DQN(nn.Module):
 
             # reset environment and process the observation
             obs, _ = env.reset()
-            obs /= 255
+            obs = obs / 255
             obs = torch.as_tensor(obs, dtype = torch.float32).to(self.device)
             # obs = self.preprocess(obs).unsqueeze(0).float().to(self.device)
             done = False

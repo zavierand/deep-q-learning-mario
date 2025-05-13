@@ -70,13 +70,17 @@ def __main__():
         },
     )
 
-    epochs = 5000
+    epochs = 10000
 
     # instantiate the model
     dqn = DQN(env, in_channels, env.action_space.n)
 
     # train the model
-    dqn._train(env, num_epochs = epochs)
+    dqn._train(
+        env, 
+        num_epochs = epochs, 
+        checkpoint_path = './checkpoints/train_02/dqn_checkpoint_epoch_4500.pt'
+    )
 
     env.close() 
 
