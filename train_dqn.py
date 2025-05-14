@@ -79,6 +79,7 @@ def __main__():
     dqn._train(
         env, 
         num_epochs = epochs, 
+        resume = True,
         checkpoint_path = './checkpoints/train_02/dqn_checkpoint_epoch_4500.pt'
     )
 

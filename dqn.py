@@ -123,7 +123,7 @@ class DQN(nn.Module):
         x = x.view(x.size(0), -1)
         return self.model(x)
     
-    def _train(self, env, num_epochs=10000, batch_size=32, gamma=0.99, checkpoint_path = None):
+    def _train(self, env, num_epochs=10000, batch_size=32, gamma=0.99, resume = False, checkpoint_path = None):
         # initialize wandb
         wandb.init(project=os.getenv('WANDB_PROJECT'), entity=os.getenv('WANDB_LOGIN'))
         
@@ -144,14 +144,16 @@ class DQN(nn.Module):
         # keep track of rewards for avg calc
         rewards = np.array([])
 
-        if checkpoint_path:
-            load_checkpoint(self.model, self.optimizer.load_state_dict, checkpoint_path)
-
-        # begin training
-        print(f'Training model for {num_epochs} epochs beginning.....')
+        if resume:
+            ck_model, ck_optim, ck_epoch, ck_loss = load_checkpoint(self.model, self.optimizer, checkpoint_path)
+            print(f'Resuming training from epoch: {ck_epoch}')
+            epoch = ck_epoch
+        else:
+            # begin training
+            print(f'Training model for {num_epochs} epochs beginning.....')
 
         # training loop
-        t = trange(num_epochs, desc="Training", leave=True)
+        t = trange(num_epochs + ck_epoch if resume == True else num_epochs, desc="Training", leave=True)
         for epoch in t:
             # slight preprocessing
             obs, _ = env.reset()
